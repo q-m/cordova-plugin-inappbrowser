@@ -392,6 +392,21 @@
     return NO;
 }
 
+- (BOOL)isAllowedScheme:(NSString*)scheme
+{
+    NSString* allowedSchemesPreference = [self settingForKey:@"AllowedSchemes"];
+    if (allowedSchemesPreference == nil || [allowedSchemesPreference isEqualToString:@""]) {
+        // Preference missing.
+        return NO;
+    }
+    for (NSString* allowedScheme in [allowedSchemesPreference componentsSeparatedByString:@","]) {
+        if ([allowedScheme isEqualToString:scheme]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 /**
  * The iframe bridge provided for the InAppBrowser is capable of executing any oustanding callback belonging
  * to the InAppBrowser plugin. Care has been taken that other callbacks cannot be triggered, and that no
@@ -437,6 +452,16 @@
             [self.commandDelegate sendPluginResult:pluginResult callbackId:scriptCallbackId];
             return NO;
         }
+    }
+    //test for whitelisted custom scheme names like mycoolapp:// or twitteroauthresponse:// (Twitter Oauth Response)
+    else if (![[ url scheme] isEqualToString:@"http"] && ![[ url scheme] isEqualToString:@"https"] && [self isAllowedScheme:[url scheme]]) {
+        // Send a customscheme event.
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
+                                                      messageAsDictionary:@{@"type":@"customscheme", @"url":[url absoluteString]}];
+        [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
+
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
+        return NO;
     }
     //if is an app store link, let the system handle it, otherwise it fails to load it
     else if ([[ url scheme] isEqualToString:@"itms-appss"] || [[ url scheme] isEqualToString:@"itms-apps"]) {
