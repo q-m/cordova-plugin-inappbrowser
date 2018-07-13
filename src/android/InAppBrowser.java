@@ -105,6 +105,7 @@ public class InAppBrowser extends CordovaPlugin {
     private static final String HIDE_URL = "hideurlbar";
     private static final String FOOTER = "footer";
     private static final String FOOTER_COLOR = "footercolor";
+    private static final String BEFORELOAD = "beforeload";
 
     private static final List customizableOptions = Arrays.asList(CLOSE_BUTTON_CAPTION, TOOLBAR_COLOR, NAVIGATION_COLOR, CLOSE_BUTTON_COLOR, FOOTER_COLOR);
 
@@ -133,6 +134,7 @@ public class InAppBrowser extends CordovaPlugin {
     private boolean hideUrlBar = false;
     private boolean showFooter = false;
     private String footerColor = "";
+    private boolean useBeforeload = false;
     private String[] allowedSchemes;
 
     /**
@@ -240,6 +242,20 @@ public class InAppBrowser extends CordovaPlugin {
         }
         else if (action.equals("close")) {
             closeDialog();
+        }
+        else if (action.equals("loadAfterBeforeload")) {
+            if (!useBeforeload) {
+              LOG.e(LOG_TAG, "unexpected loadAfterBeforeload called without feature beforeload=yes");
+            }
+            final String url = args.getString(0);
+            this.cordova.getActivity().runOnUiThread(new Runnable() {
+                @SuppressLint("NewApi")
+                @Override
+                public void run() {
+                    ((InAppBrowserClient)inAppWebView.getWebViewClient()).waitForBeforeload = false;
+                    inAppWebView.loadUrl(url);
+                }
+            });
         }
         else if (action.equals("injectScriptCode")) {
             String jsWrapper = null;
@@ -628,6 +644,10 @@ public class InAppBrowser extends CordovaPlugin {
             if (footerColorSet != null) {
                 footerColor = footerColorSet;
             }
+            String beforeload = features.get(BEFORELOAD);
+            if (beforeload != null) {
+                useBeforeload = beforeload.equals("yes") ? true : false;
+            }
         }
 
         final CordovaWebView thatWebView = this.webView;
@@ -878,7 +898,7 @@ public class InAppBrowser extends CordovaPlugin {
                     }
 
                 });
-                WebViewClient client = new InAppBrowserClient(thatWebView, edittext);
+                WebViewClient client = new InAppBrowserClient(thatWebView, edittext, useBeforeload);
                 inAppWebView.setWebViewClient(client);
                 WebSettings settings = inAppWebView.getSettings();
                 settings.setJavaScriptEnabled(true);
@@ -1039,6 +1059,8 @@ public class InAppBrowser extends CordovaPlugin {
     public class InAppBrowserClient extends WebViewClient {
         EditText edittext;
         CordovaWebView webView;
+        boolean useBeforeload;
+        boolean waitForBeforeload;
 
         /**
          * Constructor.
@@ -1046,9 +1068,11 @@ public class InAppBrowser extends CordovaPlugin {
          * @param webView
          * @param mEditText
          */
-        public InAppBrowserClient(CordovaWebView webView, EditText mEditText) {
+        public InAppBrowserClient(CordovaWebView webView, EditText mEditText, boolean useBeforeload) {
             this.webView = webView;
             this.edittext = mEditText;
+            this.useBeforeload = useBeforeload;
+            this.waitForBeforeload = useBeforeload;
         }
 
         /**
@@ -1061,12 +1085,27 @@ public class InAppBrowser extends CordovaPlugin {
          */
         @Override
         public boolean shouldOverrideUrlLoading(WebView webView, String url) {
+            boolean override = false;
+
+            // On first URL change, initiate JS callback. Only after the beforeload event, continue.
+            if (this.waitForBeforeload) {
+                try {
+                    JSONObject obj = new JSONObject();
+                    obj.put("type", "beforeload");
+                    obj.put("url", url);
+                    sendUpdate(obj, true);
+                    return true;
+                } catch (JSONException ex) {
+                    LOG.e(LOG_TAG, "URI passed in has caused a JSON error.");
+                }
+            }
+
             if (url.startsWith(WebView.SCHEME_TEL)) {
                 try {
                     Intent intent = new Intent(Intent.ACTION_DIAL);
                     intent.setData(Uri.parse(url));
                     cordova.getActivity().startActivity(intent);
-                    return true;
+                    override = true;
                 } catch (android.content.ActivityNotFoundException e) {
                     LOG.e(LOG_TAG, "Error dialing " + url + ": " + e.toString());
                 }
@@ -1075,7 +1114,7 @@ public class InAppBrowser extends CordovaPlugin {
                     Intent intent = new Intent(Intent.ACTION_VIEW);
                     intent.setData(Uri.parse(url));
                     cordova.getActivity().startActivity(intent);
-                    return true;
+                    override = true;
                 } catch (android.content.ActivityNotFoundException e) {
                     LOG.e(LOG_TAG, "Error with " + url + ": " + e.toString());
                 }
@@ -1106,7 +1145,7 @@ public class InAppBrowser extends CordovaPlugin {
                     intent.putExtra("address", address);
                     intent.setType("vnd.android-dir/mms-sms");
                     cordova.getActivity().startActivity(intent);
-                    return true;
+                    override = true;
                 } catch (android.content.ActivityNotFoundException e) {
                     LOG.e(LOG_TAG, "Error sending sms " + url + ":" + e.toString());
                 }
@@ -1127,7 +1166,7 @@ public class InAppBrowser extends CordovaPlugin {
                                 obj.put("type", "customscheme");
                                 obj.put("url", url);
                                 sendUpdate(obj, true);
-                                return true;
+                                override = true;
                             } catch (JSONException ex) {
                                 LOG.e(LOG_TAG, "Custom Scheme URI passed in has caused a JSON error.");
                             }
@@ -1136,7 +1175,10 @@ public class InAppBrowser extends CordovaPlugin {
                 }
             }
 
-            return false;
+            if (this.useBeforeload) {
+                this.waitForBeforeload = true;
+            }
+            return override;
         }
 
 
